@@ -13,7 +13,7 @@ spring:
           starttls:
             enable: true
   datasource:
-    url: jdbc:postgresql://localhost:5432/paybridge
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/paybridge}
     driver-class-name: org.postgresql.Driver
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
@@ -30,7 +30,7 @@ spring:
       hibernate:
         format_sql: true
   config:
-    import: "file:.env[.properties]"
+    import: "optional:file:.env[.properties]"
 
 server:
   port: 8080
@@ -42,7 +42,7 @@ springdoc:
 
 paybridge:
   paystack:
-    base-url: https://api.paystack.co
+    base-url: ${PAYSTACK_BASE_URL:https://api.paystack.co}
     # Put your real Paystack test key in an env variable PAYSTACK_SECRET_KEY,
     # or replace sk_test_placeholder below with your Paystack test secret key.
     secret-key: ${PAYSTACK_SECRET_KEY}
