@@ -1,9 +1,12 @@
 package com.academy.paybridge.notification.listener;
 
+import com.academy.paybridge.notification.api.AccountCreatedEvent;
+import com.academy.paybridge.notification.api.FundingEvent;
 import com.academy.paybridge.notification.api.TransferEvent;
 import com.academy.paybridge.notification.service.NotificationService;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 @Component
 public class TransferNotificationListener {
@@ -14,13 +17,19 @@ public class TransferNotificationListener {
         this.notificationService = notificationService;
     }
 
-    @EventListener
+    /** Only alert once the money movement is committed; fallbackExecution covers events published outside a transaction. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onTransferEvent(TransferEvent event) {
         notificationService.sendTransferAlerts(event);
     }
-    @org.springframework.context.event.EventListener
-    public void onAccountCreated(com.academy.paybridge.notification.api.AccountCreatedEvent event) {
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onAccountCreated(AccountCreatedEvent event) {
         notificationService.sendWelcomeEmail(event);
     }
 
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onFunding(FundingEvent event) {
+        notificationService.sendFundingAlert(event);
+    }
 }

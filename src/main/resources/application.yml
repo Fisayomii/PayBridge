@@ -41,22 +41,100 @@ springdoc:
     operationsSorter: method
 
 paybridge:
+  payments:
+    # paystack  = real Paystack API (test or live key in PAYSTACK_SECRET_KEY)
+    # simulated = in-memory provider for offline demos; never use in production
+    provider: ${PAYBRIDGE_PAYMENTS_PROVIDER:paystack}
+
+  security:
+    jwt:
+      # At least 32 random bytes. Generate one with:  openssl rand -base64 48
+      secret: ${PAYBRIDGE_JWT_SECRET:}
+      issuer: paybridge
+      access-token-ttl: PT15M
+      refresh-token-ttl: P14D
+    login:
+      max-failed-attempts: 5
+      lock-duration: PT15M
+
+  # Creates the first admin on startup if none exists. Remove the password once the admin exists.
+  bootstrap:
+    admin:
+      email: ${PAYBRIDGE_BOOTSTRAP_ADMIN_EMAIL:}
+      password: ${PAYBRIDGE_BOOTSTRAP_ADMIN_PASSWORD:}
+
+  transfer:
+    fees:
+      internal: 0.00
+      # Bands are checked in order; the last band has no upper bound.
+      external-bands:
+        - up-to: 5000.00
+          fee: 10.00
+        - up-to: 50000.00
+          fee: 25.00
+        - fee: 50.00
+    reconciliation:
+      enabled: ${PAYBRIDGE_RECONCILIATION_ENABLED:true}
+      interval: PT1M
+      min-age: PT2M
+      batch-size: 100
+
+  funding:
+    # Where Paystack sends the customer after checkout (your web/mobile app).
+    callback-url: ${PAYBRIDGE_FUNDING_CALLBACK_URL:}
+    reconciliation:
+      enabled: ${PAYBRIDGE_RECONCILIATION_ENABLED:true}
+      interval: PT5M
+      min-age: PT5M
+      abandon-after: PT24H
+
+  # CBN tiered-KYC limits (NGN). Confirm figures with compliance before go-live.
+  compliance:
+    tiers:
+      1:
+        single-transfer-limit: 50000.00
+        daily-transfer-limit: 50000.00
+        max-balance: 300000.00
+      2:
+        single-transfer-limit: 100000.00
+        daily-transfer-limit: 200000.00
+        max-balance: 500000.00
+      3:
+        single-transfer-limit: 5000000.00
+        daily-transfer-limit: 25000000.00
+    velocity:
+      max-transfers: 10
+      window: PT10M
+    sanctioned-wallets:
+      - WALLET-9999
+      - WALLET-BLACKLIST
+    blocked-narration-keywords:
+      - FRAUD
+
   paystack:
     base-url: ${PAYSTACK_BASE_URL:https://api.paystack.co}
-    # Put your real Paystack test key in an env variable PAYSTACK_SECRET_KEY,
-    # or replace sk_test_placeholder below with your Paystack test secret key.
-    secret-key: ${PAYSTACK_SECRET_KEY}
+    # Never commit keys: set PAYSTACK_SECRET_KEY in the environment or in .env (git-ignored).
+    # The same key verifies webhook signatures.
+    secret-key: ${PAYSTACK_SECRET_KEY:}
+    connect-timeout: PT5S
+    read-timeout: PT20S
 
 resilience4j:
   retry:
     instances:
-      paystackRetry:
+      paystack:
         maxAttempts: 3
-        waitDuration: 2s
+        waitDuration: 1s
+        # Only retry when the outcome is unknown; a definitive rejection will not change on retry.
+        retryExceptions:
+          - com.academy.paybridge.shared.provider.GatewayUnavailableException
   circuitbreaker:
     instances:
-      paystackCircuitBreaker:
-        slidingWindowSize: 5
+      paystack:
+        slidingWindowSize: 10
         failureRateThreshold: 50
-        waitDurationInOpenState: 10s
+        waitDurationInOpenState: 30s
         permittedNumberOfCallsInHalfOpenState: 3
+        # A rejected account number is a healthy provider saying "no", not an outage.
+        ignoreExceptions:
+          - com.academy.paybridge.shared.provider.GatewayRejectedException

@@ -18,6 +18,18 @@ public class PayBridgeException extends RuntimeException {
         return new PayBridgeException(message, HttpStatus.NOT_FOUND);
     }
 
+    public static PayBridgeException conflict(String message) {
+        return new PayBridgeException(message, HttpStatus.CONFLICT);
+    }
+
+    public static PayBridgeException unprocessable(String message) {
+        return new PayBridgeException(message, HttpStatus.UNPROCESSABLE_CONTENT);
+    }
+
+    public static PayBridgeException serviceUnavailable(String message) {
+        return new PayBridgeException(message, HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
     public HttpStatus getStatus() {
         return status;
     }

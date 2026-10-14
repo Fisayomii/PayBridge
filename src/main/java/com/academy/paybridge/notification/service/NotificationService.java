@@ -1,6 +1,7 @@
 package com.academy.paybridge.notification.service;
 
 import com.academy.paybridge.notification.api.AccountCreatedEvent;
+import com.academy.paybridge.notification.api.FundingEvent;
 import com.academy.paybridge.notification.api.TransferEvent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -26,20 +27,54 @@ public class NotificationService {
     }
 
     public void sendTransferAlerts(TransferEvent event) {
-        String debitBody = String.format(
-                "PayBridge Transaction Alert [DEBIT]\n\n" +
-                        "Wallet: %s\n" +
-                        "Amount: %s %s DR\n" +
-                        "Beneficiary: %s (%s)\n" +
-                        "Description: %s\n" +
-                        "Reference: %s\n" +
-                        "Status: %s\n" +
-                        "Available Balance: %s %s\n",
-                event.sourceWalletNumber(), event.currency(), event.amount(),
-                event.beneficiaryName(), event.destinationWalletNumber(),
-                event.narration(), event.reference(), event.status(),
-                event.currency(), event.senderBalanceAfter()
+        boolean refund = "FAILED".equals(event.status()) || "REVERSED".equals(event.status());
+        boolean external = "EXTERNAL".equals(event.transferType());
+
+        if (external && "SUCCESS".equals(event.status())) {
+            // The sender was already alerted when the funds were debited; nothing new to tell them.
+            log.info("[PAYBRIDGE] Payout {} to {} delivered", event.reference(), event.destination());
+            return;
+        }
+
+        String senderBody = refund
+                ? String.format(
+                        "PayBridge Transaction Alert [REVERSAL]\n\n" +
+                                "Wallet: %s\n" +
+                                "Amount: %s %s CR\n" +
+                                "Your transfer to %s (%s) could not be completed and has been refunded.\n" +
+                                "Description: %s\n" +
+                                "Reference: %s\n" +
+                                "Available Balance: %s %s\n",
+                        event.sourceWalletNumber(), event.currency(), event.amount(),
+                        event.beneficiaryName(), event.destination(),
+                        event.narration(), event.reference(),
+                        event.currency(), event.senderBalanceAfter())
+                : String.format(
+                        "PayBridge Transaction Alert [DEBIT]\n\n" +
+                                "Wallet: %s\n" +
+                                "Amount: %s %s DR\n" +
+                                "Beneficiary: %s (%s)\n" +
+                                "Description: %s\n" +
+                                "Reference: %s\n" +
+                                "Status: %s\n" +
+                                "Available Balance: %s %s\n",
+                        event.sourceWalletNumber(), event.currency(), event.amount(),
+                        event.beneficiaryName(), event.destination(),
+                        event.narration(), event.reference(), event.status(),
+                        event.currency(), event.senderBalanceAfter());
+
+        String alertType = refund ? "Reversal" : "Debit";
+        log.info("\n==================== [PAYBRIDGE ALERT - {}] ====================\n{}\n===================================================================",
+                alertType.toUpperCase(), senderBody);
+        sendRealEmailIfConfigured(
+                event.senderEmail(),
+                "PayBridge " + alertType + " Alert: " + event.currency() + " " + event.amount() + " [" + event.reference() + "]",
+                senderBody
         );
+
+        if (external) {
+            return; // the beneficiary banks elsewhere; their bank alerts them
+        }
 
         String creditBody = String.format(
                 "PayBridge Transaction Alert [CREDIT]\n\n" +
@@ -50,25 +85,13 @@ public class NotificationService {
                         "Sender Wallet: %s\n" +
                         "Description: %s\n" +
                         "Reference: %s\n" +
-                        "Status: %s\n" +
                         "Available Balance: %s %s\n",
-                event.beneficiaryName(), event.destinationWalletNumber(),
+                event.beneficiaryName(), event.destination(),
                 event.currency(), event.amount(), event.sourceWalletNumber(),
-                event.narration(), event.reference(), event.status(),
+                event.narration(), event.reference(),
                 event.currency(), event.receiverBalanceAfter()
         );
-
-        log.info("\n==================== [PAYBRIDGE ALERT - DEBIT] ====================\n{}\n===================================================================", debitBody);
         log.info("\n==================== [PAYBRIDGE ALERT - CREDIT] ===================\n{}\n===================================================================", creditBody);
-
-        // Send live email to Sender if they have a real email address
-        sendRealEmailIfConfigured(
-                event.senderEmail(),
-                "PayBridge Debit Alert: " + event.currency() + " " + event.amount() + " [" + event.reference() + "]",
-                debitBody
-        );
-
-        // Send live email to Receiver (Your Classmate!) if they have a real email address
         sendRealEmailIfConfigured(
                 event.receiverEmail(),
                 "PayBridge Credit Alert: " + event.currency() + " " + event.amount() + " [" + event.reference() + "]",
@@ -95,6 +118,25 @@ public class NotificationService {
         } catch (Exception ex) {
             log.warn("Could not send live email to {}: {}", toEmail, ex.getMessage());
         }
+    }
+
+    public void sendFundingAlert(FundingEvent event) {
+        boolean credit = "CREDIT".equals(event.direction());
+        String body = String.format(
+                "PayBridge Transaction Alert [%s]%n%n" +
+                        "Wallet: %s%n" +
+                        "Amount: %s %s %s%n" +
+                        "Description: %s%n" +
+                        "Reference: %s%n" +
+                        "Available Balance: %s %s%n",
+                credit ? "CREDIT" : "DEBIT",
+                event.walletNumber(), event.currency(), event.amount(), credit ? "CR" : "DR",
+                "PAYSTACK_CHECKOUT".equals(event.channel()) ? "Wallet top-up" : "Account adjustment",
+                event.reference(), event.currency(), event.balanceAfter());
+        log.info("\n==================== [PAYBRIDGE ALERT - FUNDING] ===================\n{}\n===================================================================", body);
+        sendRealEmailIfConfigured(event.email(),
+                "PayBridge " + (credit ? "Credit" : "Debit") + " Alert: " + event.currency() + " " + event.amount(),
+                body);
     }
 
     public void sendWelcomeEmail(AccountCreatedEvent event) {

@@ -1,11 +1,10 @@
 package com.academy.paybridge.shared.money;
 
-import jakarta.persistence.Embeddable;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Objects;
 
-@Embeddable
+
 public record Money(BigDecimal amount, String currency) {
 
     public Money {

@@ -2,58 +2,76 @@ package com.academy.paybridge.account.web;
 
 import com.academy.paybridge.account.api.AccountDto;
 import com.academy.paybridge.account.service.AccountService;
+import com.academy.paybridge.customer.api.CustomerApi;
+import com.academy.paybridge.customer.api.CustomerDto;
+import com.academy.paybridge.ledger.api.LedgerApi;
+import com.academy.paybridge.ledger.api.LedgerEntryDto;
+import com.academy.paybridge.shared.security.AuthenticatedUser;
+import com.academy.paybridge.shared.security.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.PositiveOrZero;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/accounts")
-@Tag(name = "1. Wallets (Account Module)", description = "View and create customer NGN wallets before and after transfers")
+@Tag(name = "1. Wallets", description = "Your wallets, statements, and wallet name enquiry")
 public class AccountController {
 
     private final AccountService accountService;
+    private final CustomerApi customerApi;
+    private final LedgerApi ledgerApi;
 
-    public AccountController(AccountService accountService) {
+    public AccountController(AccountService accountService, CustomerApi customerApi, LedgerApi ledgerApi) {
         this.accountService = accountService;
+        this.customerApi = customerApi;
+        this.ledgerApi = ledgerApi;
     }
 
     @GetMapping
-    @Operation(summary = "List all wallets and their live balances (2 demo wallets are pre-seeded!)")
-    public List<AccountDto> getAllWallets() {
-        return accountService.listAllWallets();
-    }
-
-    @GetMapping("/{walletNumber}")
-    @Operation(summary = "Get a specific wallet by walletNumber (e.g. WALLET-1001)")
-    public AccountDto getByWalletNumber(@PathVariable String walletNumber) {
-        return accountService.getByWalletNumber(walletNumber);
+    @Operation(summary = "List your wallets and balances")
+    public List<AccountDto> myWallets() {
+        return accountService.getByCustomer(CurrentUser.require().customerId());
     }
 
     @PostMapping
-    @Operation(summary = "Create and fund a new NGN wallet")
-    public AccountDto createWallet(@Valid @RequestBody CreateWalletRequest request) {
-        return accountService.createWallet(
-                request.walletNumber(),
-                request.ownerName(),
-                request.email(),
-                request.externalBankAccountNumber(),
-                request.externalBankCode(),
-                request.initialBalance()
-        );
+    @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Open an additional wallet (an NGN wallet is opened automatically at registration)")
+    public AccountDto openWallet(@Valid @RequestBody OpenWalletRequest request) {
+        AuthenticatedUser user = CurrentUser.require();
+        CustomerDto customer = customerApi.requireActive(user.customerId());
+        return accountService.openWallet(customer.id(), customer.fullName(), customer.email(), request.currency());
     }
 
-    public record CreateWalletRequest(
-            @NotBlank String walletNumber,
-            @NotBlank String ownerName,
-            @NotBlank String email,
-            @NotBlank String externalBankAccountNumber,
-            @NotBlank String externalBankCode,
-            @PositiveOrZero BigDecimal initialBalance
+    @GetMapping("/{walletNumber}")
+    @Operation(summary = "Get one of your wallets")
+    public AccountDto getWallet(@PathVariable String walletNumber) {
+        return accountService.getForUser(CurrentUser.require(), walletNumber);
+    }
+
+    @GetMapping("/{walletNumber}/statement")
+    @Operation(summary = "Wallet statement: every debit and credit, newest first")
+    public List<LedgerEntryDto> statement(@PathVariable String walletNumber,
+                                          @RequestParam(defaultValue = "0") int page,
+                                          @RequestParam(defaultValue = "50") int size) {
+        AccountDto wallet = accountService.getForUser(CurrentUser.require(), walletNumber);
+        return ledgerApi.getEntriesForAccount(wallet.id(), Math.max(page, 0), Math.max(size, 1));
+    }
+
+    @GetMapping("/lookup")
+    @Operation(summary = "Name enquiry for a PayBridge wallet before a wallet-to-wallet transfer")
+    public AccountService.WalletLookup lookup(@RequestParam String walletNumber) {
+        CurrentUser.require();
+        return accountService.lookup(walletNumber);
+    }
+
+    public record OpenWalletRequest(
+            @Schema(example = "NGN")
+            @NotBlank String currency
     ) {}
 }
