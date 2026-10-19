@@ -42,4 +42,13 @@ public interface TransferRepository extends JpaRepository<Transfer, UUID> {
                                 @Param("excluded") Collection<TransferStatus> excluded);
 
     long countBySourceAccountIdAndCreatedAtAfter(UUID sourceAccountId, Instant since);
+
+    List<Transfer> findByTypeAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtAsc(
+            TransferType type, Instant from, Instant to);
+
+    @Query("""
+            select coalesce(sum(t.amount), 0) from Transfer t
+            where t.type = com.academy.paybridge.transfer.domain.TransferType.EXTERNAL
+              and t.currency = :currency and t.status in :open""")
+    BigDecimal sumOpenPayouts(@Param("currency") String currency, @Param("open") Collection<TransferStatus> open);
 }

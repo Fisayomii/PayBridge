@@ -33,7 +33,11 @@ import static org.assertj.core.api.Assertions.assertThat;
         "paybridge.transfer.reconciliation.enabled=false",
         "paybridge.funding.reconciliation.enabled=false",
         "paybridge.security.jwt.secret=test-only-secret-that-is-at-least-32-bytes-long!!",
-        "paybridge.compliance.velocity.max-transfers=1000"
+        "paybridge.compliance.velocity.max-transfers=1000",
+        "paybridge.settlement.nightly.enabled=false",
+        "paybridge.fx.feed.enabled=false",
+        "paybridge.kyc.provider=simulated",
+        "paybridge.compliance.ofac.enabled=false"
 })
 @AutoConfigureMockMvc
 public abstract class IntegrationTest {
@@ -50,13 +54,19 @@ public abstract class IntegrationTest {
 
     @AfterEach
     void ledgerStillBalances() {
-        BigDecimal total = jdbc.queryForObject("select coalesce(sum(balance), 0) from accounts", BigDecimal.class);
-        assertThat(total).as("sum of all account balances (double-entry invariant)").isEqualByComparingTo("0");
-        BigDecimal debits = jdbc.queryForObject(
-                "select coalesce(sum(amount), 0) from ledger_entries where entry_type = 'DEBIT'", BigDecimal.class);
-        BigDecimal credits = jdbc.queryForObject(
-                "select coalesce(sum(amount), 0) from ledger_entries where entry_type = 'CREDIT'", BigDecimal.class);
-        assertThat(debits).as("ledger debits == credits").isEqualByComparingTo(credits);
+        // Each currency balances on its own: a USD posting can never be "balanced" by an NGN one.
+        jdbc.queryForList("select currency, sum(balance) as total from accounts group by currency").forEach(row ->
+                assertThat((BigDecimal) row.get("total"))
+                        .as("sum of all %s account balances (double-entry invariant)", row.get("currency"))
+                        .isEqualByComparingTo("0"));
+        jdbc.queryForList("""
+                select currency,
+                       coalesce(sum(case when entry_type = 'DEBIT' then amount end), 0) as debits,
+                       coalesce(sum(case when entry_type = 'CREDIT' then amount end), 0) as credits
+                from ledger_entries group by currency""").forEach(row ->
+                assertThat((BigDecimal) row.get("debits"))
+                        .as("%s ledger debits == credits", row.get("currency"))
+                        .isEqualByComparingTo((BigDecimal) row.get("credits")));
     }
 
     /** A registered tier-1 customer with an empty NGN wallet. */

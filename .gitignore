@@ -5,3 +5,6 @@ target/
 .DS_Store
 .env
 
+
+### Downloaded sanctions lists (cache) ###
+/data/

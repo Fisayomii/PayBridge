@@ -2,6 +2,7 @@ package com.academy.paybridge.notification.listener;
 
 import com.academy.paybridge.notification.api.AccountCreatedEvent;
 import com.academy.paybridge.notification.api.FundingEvent;
+import com.academy.paybridge.notification.api.RemittanceEvent;
 import com.academy.paybridge.notification.api.TransferEvent;
 import com.academy.paybridge.notification.service.NotificationService;
 import org.springframework.stereotype.Component;
@@ -31,5 +32,10 @@ public class TransferNotificationListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onFunding(FundingEvent event) {
         notificationService.sendFundingAlert(event);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onRemittance(RemittanceEvent event) {
+        notificationService.sendRemittanceAlert(event);
     }
 }

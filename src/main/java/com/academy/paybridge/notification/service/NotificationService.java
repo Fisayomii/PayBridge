@@ -2,6 +2,7 @@ package com.academy.paybridge.notification.service;
 
 import com.academy.paybridge.notification.api.AccountCreatedEvent;
 import com.academy.paybridge.notification.api.FundingEvent;
+import com.academy.paybridge.notification.api.RemittanceEvent;
 import com.academy.paybridge.notification.api.TransferEvent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -136,6 +137,23 @@ public class NotificationService {
         log.info("\n==================== [PAYBRIDGE ALERT - FUNDING] ===================\n{}\n===================================================================", body);
         sendRealEmailIfConfigured(event.email(),
                 "PayBridge " + (credit ? "Credit" : "Debit") + " Alert: " + event.currency() + " " + event.amount(),
+                body);
+    }
+
+    public void sendRemittanceAlert(RemittanceEvent event) {
+        String body = String.format(
+                "PayBridge Transaction Alert [CREDIT]%n%n" +
+                        "Wallet: %s%n" +
+                        "Amount: %s %s CR%n" +
+                        "Description: Money from abroad, sent by %s (%s)%n" +
+                        "Reference: %s%n" +
+                        "Available Balance: %s %s%n",
+                event.recipientWalletNumber(), event.currency(), event.amount(),
+                event.senderName(), event.senderCountry(), event.reference(),
+                event.currency(), event.balanceAfter());
+        log.info("\n==================== [PAYBRIDGE ALERT - REMITTANCE] ================\n{}\n===================================================================", body);
+        sendRealEmailIfConfigured(event.recipientEmail(),
+                "PayBridge Credit Alert: " + event.currency() + " " + event.amount() + " from " + event.senderName(),
                 body);
     }
 

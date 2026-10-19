@@ -2,6 +2,7 @@ package com.academy.paybridge.compliance.api;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Compliance owns the rules (sanctions, KYC-tier limits, velocity); callers supply the facts.
@@ -18,6 +19,30 @@ public interface ComplianceApi {
 
     /** Look-back window the caller must count transfers over for the velocity rule. */
     Duration velocityWindow();
+
+    /**
+     * Screens an inbound remittance. Unlike transfers it does not throw for a possible match: a REVIEW
+     * decision parks the remittance for an analyst instead of rejecting a customer on a fuzzy name hit.
+     */
+    ScreeningResult screenRemittance(RemittanceScreening screening);
+
+    enum Decision { CLEAR, REVIEW, BLOCK }
+
+    record ScreeningResult(Decision decision, List<String> reasons) {
+        public boolean isClear() { return decision == Decision.CLEAR; }
+    }
+
+    record RemittanceScreening(
+            String senderName,
+            /** ISO 3166 alpha-2. */
+            String senderCountry,
+            /** Recipient name as the partner sent it. */
+            String recipientName,
+            /** Name on the PayBridge wallet being credited. */
+            String recipientAccountName,
+            BigDecimal amountUsd,
+            String purpose
+    ) {}
 
     record TransferScreening(
             String sourceWalletNumber,

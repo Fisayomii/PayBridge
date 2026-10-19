@@ -10,6 +10,9 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -20,9 +23,11 @@ public class ComplianceService implements ComplianceApi {
     private static final Logger log = LogManager.getLogger(ComplianceService.class);
 
     private final ComplianceProperties props;
+    private final SanctionsListService sanctions;
 
-    public ComplianceService(ComplianceProperties props) {
+    public ComplianceService(ComplianceProperties props, SanctionsListService sanctions) {
         this.props = props;
+        this.sanctions = sanctions;
     }
 
     @Override
@@ -79,5 +84,99 @@ public class ComplianceService implements ComplianceApi {
     @Override
     public Duration velocityWindow() {
         return props.velocity() == null ? Duration.ofMinutes(10) : props.velocity().window();
+    }
+
+    @Override
+    public ScreeningResult screenRemittance(RemittanceScreening s) {
+        ComplianceProperties.Remittance rules = props.remittance();
+        List<String> block = new ArrayList<>();
+        List<String> review = new ArrayList<>();
+
+        if (rules != null && rules.blockedCountries() != null
+                && rules.blockedCountries().contains(s.senderCountry().toUpperCase(Locale.ROOT))) {
+            block.add("Sender country " + s.senderCountry().toUpperCase(Locale.ROOT) + " is under comprehensive sanctions");
+        }
+        if (s.purpose() != null && props.blockedNarrationKeywords() != null) {
+            String purpose = s.purpose().toUpperCase(Locale.ROOT);
+            for (String keyword : props.blockedNarrationKeywords()) {
+                if (purpose.contains(keyword.toUpperCase(Locale.ROOT))) {
+                    block.add("Purpose contains blocked keyword");
+                }
+            }
+        }
+        if (rules != null && rules.watchlist() != null) {
+            for (String listed : rules.watchlist()) {
+                if (nameMatches(s.senderName(), listed)) {
+                    review.add("Possible watchlist match for sender: " + listed);
+                }
+                if (nameMatches(s.recipientName(), listed) || nameMatches(s.recipientAccountName(), listed)) {
+                    review.add("Possible watchlist match for recipient: " + listed);
+                }
+            }
+        }
+        if (sanctions.enabled()) {
+            if (!sanctions.isLoaded()) {
+                // Fail closed: never wave money through because the list could not be loaded.
+                review.add("OFAC sanctions list not loaded: manual screening required");
+            } else {
+                screenOfac("Sender", s.senderName(), review);
+                screenOfac("Recipient", s.recipientName(), review);
+                if (!sameWords(s.recipientName(), s.recipientAccountName())) {
+                    screenOfac("Recipient wallet holder", s.recipientAccountName(), review);
+                }
+            }
+        }
+        if (rules != null && rules.reviewThresholdUsd() != null
+                && s.amountUsd().compareTo(rules.reviewThresholdUsd()) >= 0) {
+            review.add("Amount USD " + s.amountUsd().toPlainString() + " is at or above the review threshold of USD "
+                    + rules.reviewThresholdUsd().toPlainString());
+        }
+        if (!sharesAName(s.recipientName(), s.recipientAccountName())) {
+            review.add("Recipient name '" + s.recipientName() + "' does not match the wallet name '"
+                    + s.recipientAccountName() + "'");
+        }
+
+        if (!block.isEmpty()) {
+            log.warn("COMPLIANCE remittance blocked: {}", block);
+            return new ScreeningResult(Decision.BLOCK, List.copyOf(block));
+        }
+        if (!review.isEmpty()) {
+            log.info("COMPLIANCE remittance needs review: {}", review);
+            return new ScreeningResult(Decision.REVIEW, List.copyOf(review));
+        }
+        return new ScreeningResult(Decision.CLEAR, List.of());
+    }
+
+    private void screenOfac(String party, String name, List<String> review) {
+        for (OfacSanctionsList.Hit hit : sanctions.screen(name)) {
+            review.add(party + " '" + name + "': " + hit.describe());
+        }
+    }
+
+    private static boolean sameWords(String a, String b) {
+        return words(a).equals(words(b));
+    }
+
+    /** Every word of the listed name appears in the candidate, in any order ("Doe John" matches "John Doe"). */
+    static boolean nameMatches(String candidate, String listed) {
+        Set<String> words = words(candidate);
+        Set<String> listedWords = words(listed);
+        return !listedWords.isEmpty() && words.containsAll(listedWords);
+    }
+
+    /** Loose name check between what the partner sent and the wallet's name: at least one word in common. */
+    static boolean sharesAName(String a, String b) {
+        Set<String> left = words(a);
+        left.retainAll(words(b));
+        return !left.isEmpty();
+    }
+
+    private static Set<String> words(String name) {
+        Set<String> out = new HashSet<>();
+        if (name == null) return out;
+        for (String w : name.toUpperCase(Locale.ROOT).split("[^\\p{L}]+")) {
+            if (w.length() > 1) out.add(w);
+        }
+        return out;
     }
 }

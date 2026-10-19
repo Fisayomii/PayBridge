@@ -67,9 +67,16 @@ public class Account {
         return a;
     }
 
+    public static Account partnerPrefund(String walletNumber, UUID partnerId, String partnerName,
+                                         String email, String currency) {
+        Account a = customerWallet(walletNumber, partnerId, partnerName, email, currency);
+        a.type = AccountType.PARTNER;
+        return a;
+    }
+
     public void debit(BigDecimal amount) {
-        if (type == AccountType.CUSTOMER && balance.compareTo(amount) < 0) {
-            throw new IllegalStateException("Debit would overdraw customer wallet " + walletNumber);
+        if (type != AccountType.INTERNAL && balance.compareTo(amount) < 0) {
+            throw new IllegalStateException("Debit would overdraw account " + walletNumber);
         }
         this.balance = this.balance.subtract(amount);
     }

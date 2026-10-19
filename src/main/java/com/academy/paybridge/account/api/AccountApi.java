@@ -14,6 +14,12 @@ public interface AccountApi {
     /** Opens a customer wallet with a zero balance. Money only ever enters through a ledgered funding. */
     AccountDto openWallet(UUID customerId, String ownerName, String email, String currency);
 
+    /** Opens a remittance partner's prefund account (type PARTNER) with a zero balance. */
+    AccountDto openPartnerAccount(UUID partnerId, String partnerName, String email, String currency);
+
+    /** Every account, customer and GL, for the trial balance. */
+    List<AccountDto> listAll();
+
     /**
      * Atomically moves {@code amount} from one account to another. Both rows are locked
      * (in a fixed order, so concurrent opposite-direction transfers cannot deadlock),

@@ -1,4 +1,10 @@
 spring:
+  # Several background jobs (rate feed, OFAC list download, payout and funding reconcilers, nightly
+  # settlement): with the default single thread, one slow download would stall all the others.
+  task:
+    scheduling:
+      pool:
+        size: 4
   application:
     name: paybridge
   mail:
@@ -51,7 +57,7 @@ paybridge:
       # At least 32 random bytes. Generate one with:  openssl rand -base64 48
       secret: ${PAYBRIDGE_JWT_SECRET:}
       issuer: paybridge
-      access-token-ttl: PT15M
+      access-token-ttl: PT2H
       refresh-token-ttl: P14D
     login:
       max-failed-attempts: 5
@@ -110,6 +116,60 @@ paybridge:
       - WALLET-BLACKLIST
     blocked-narration-keywords:
       - FRAUD
+    remittance:
+      # Comprehensive-sanctions jurisdictions: money from these senders is refused outright.
+      blocked-countries: [KP, IR, SY, CU]
+      # Stand-in for OFAC/UN/UK/EU lists (fictional names). A match parks the remittance for review.
+      watchlist:
+        - Viktor Sanctionov
+        - Blocked Trading Ltd
+      review-threshold-usd: 3000.00
+    # Real US Treasury OFAC SDN list (public, no key). Hits send a remittance to review.
+    ofac:
+      enabled: ${PAYBRIDGE_OFAC_ENABLED:true}
+      sdn-url: https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.CSV
+      alt-url: https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/ALT.CSV
+      refresh: P1D
+      cache-dir: ${PAYBRIDGE_SANCTIONS_CACHE_DIR:./data/sanctions}
+
+  # USD -> NGN pricing from the live feed (open.er-api.com, free, no key). Admins can still override.
+  fx:
+    # Used only before any rate has been stored, with the feed switched off.
+    initial-mid-rate: 1550.00
+    spread-percent: 1.50
+    remittance-fee: 3.00
+    quote-ttl: PT10M
+    max-rate-move-percent: 10
+    feed:
+      enabled: ${PAYBRIDGE_FX_FEED_ENABLED:true}
+      base-url: https://open.er-api.com
+      refresh: PT30M
+      # Quoting pauses if no fresh rate has been stored for this long (feed down, or a move refused by the guard).
+      max-age: PT6H
+
+  remittance:
+    min-amount-usd: 10.00
+    max-amount-usd: 10000.00
+
+  settlement:
+    liquidity:
+      # Warn (status LOW) when Paystack balance minus payouts in flight drops under this.
+      low-balance-threshold: 100000.00
+      # Balance reported by the simulated provider.
+      simulated-balance: 2000000.00
+    nightly:
+      enabled: ${PAYBRIDGE_SETTLEMENT_NIGHTLY_ENABLED:true}
+      cron: "0 30 0 * * *"
+
+  # Self-service BVN verification. simulated (default, offline) or dojah (sandbox: https://sandbox.dojah.io).
+  kyc:
+    provider: ${PAYBRIDGE_KYC_PROVIDER:simulated}
+    # Keys the HMAC of stored BVNs. Defaults to the JWT secret; set its own value in production.
+    hash-key: ${PAYBRIDGE_KYC_HASH_KEY:${paybridge.security.jwt.secret}}
+    dojah:
+      base-url: ${DOJAH_BASE_URL:https://sandbox.dojah.io}
+      app-id: ${DOJAH_APP_ID:}
+      secret-key: ${DOJAH_SECRET_KEY:}
 
   paystack:
     base-url: ${PAYSTACK_BASE_URL:https://api.paystack.co}

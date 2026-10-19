@@ -56,6 +56,11 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/partner/**").hasRole("PARTNER")
+                        .requestMatchers("/api/v1/kyc/**").hasRole("CUSTOMER")
+                        // Partners only use the partner API; wallet features are for customers (and admins).
+                        .requestMatchers("/api/v1/accounts/**", "/api/v1/transfers/**", "/api/v1/fundings/**",
+                                "/api/v1/beneficiaries/**").hasAnyRole("CUSTOMER", "ADMIN")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth -> oauth
                         .jwt(jwt -> jwt.decoder(jwtDecoder).jwtAuthenticationConverter(source -> {

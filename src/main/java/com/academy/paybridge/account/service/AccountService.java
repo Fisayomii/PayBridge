@@ -93,6 +93,24 @@ public class AccountService implements AccountApi {
 
     @Override
     @Transactional
+    public AccountDto openPartnerAccount(UUID partnerId, String partnerName, String email, String currency) {
+        String ccy = currency.trim().toUpperCase();
+        if (accountRepository.existsByCustomerIdAndCurrency(partnerId, ccy)) {
+            throw PayBridgeException.conflict("Partner already has a " + ccy + " prefund account");
+        }
+        String number = "PARTNER-" + ccy + "-" + String.format("%06d", RANDOM.nextInt(1_000_000));
+        return toDto(accountRepository.save(Account.partnerPrefund(number, partnerId, partnerName, email, ccy)));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<AccountDto> listAll() {
+        return accountRepository.findAll(Sort.by("currency", "type", "walletNumber")).stream()
+                .map(this::toDto).toList();
+    }
+
+    @Override
+    @Transactional
     public void moveFunds(UUID debitAccountId, UUID creditAccountId, BigDecimal amount, String currency,
                           MovementKind kind) {
         if (amount == null || amount.signum() <= 0) {
@@ -126,7 +144,7 @@ public class AccountService implements AccountApi {
                         + " cannot receive funds at this time");
             }
         }
-        if (debitAcc.getType() == AccountType.CUSTOMER && debitAcc.getBalance().compareTo(amount) < 0) {
+        if (debitAcc.getType() != AccountType.INTERNAL && debitAcc.getBalance().compareTo(amount) < 0) {
             throw PayBridgeException.unprocessable("Insufficient funds in wallet " + debitAcc.getWalletNumber());
         }
         debitAcc.debit(amount);

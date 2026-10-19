@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -16,8 +17,16 @@ public record ComplianceProperties(
         Map<Integer, TierLimits> tiers,
         Velocity velocity,
         Set<String> sanctionedWallets,
-        Set<String> blockedNarrationKeywords
+        Set<String> blockedNarrationKeywords,
+        Remittance remittance
 ) {
+    /**
+     * @param blockedCountries   sender countries we cannot accept money from (comprehensive sanctions)
+     * @param watchlist          names screened against sender and recipient (stand-in for OFAC/UN/UK/EU lists)
+     * @param reviewThresholdUsd remittances at or above this go to manual review
+     */
+    public record Remittance(Set<String> blockedCountries, List<String> watchlist, BigDecimal reviewThresholdUsd) {}
+
     public record TierLimits(
             BigDecimal singleTransferLimit,
             BigDecimal dailyTransferLimit,

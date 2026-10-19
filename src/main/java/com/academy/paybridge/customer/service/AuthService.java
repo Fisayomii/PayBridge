@@ -85,9 +85,11 @@ public class AuthService {
         } catch (DataIntegrityViolationException ex) {
             throw PayBridgeException.conflict("An account with this email already exists");
         }
-        AccountDto wallet = role == Role.CUSTOMER
-                ? accountApi.openWallet(customer.getId(), customer.getFullName(), customer.getEmail(), "NGN")
-                : null;
+        AccountDto wallet = switch (role) {
+            case CUSTOMER -> accountApi.openWallet(customer.getId(), customer.getFullName(), customer.getEmail(), "NGN");
+            case PARTNER -> accountApi.openPartnerAccount(customer.getId(), customer.getFullName(), customer.getEmail(), "USD");
+            case ADMIN -> null;
+        };
         return new Registration(CustomerService.toDto(customer), wallet);
     }
 

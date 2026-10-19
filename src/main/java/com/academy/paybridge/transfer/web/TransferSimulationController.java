@@ -38,7 +38,8 @@ public class TransferSimulationController {
     }
 
     @PostMapping("/{reference}/webhook")
-    @Operation(summary = "Simulate a payout webhook (transfer.success, transfer.failed -> refund, transfer.reversed -> refund)")
+    @Operation(summary = "Simulate a payout webhook (transfer.success, transfer.failed -> refund, transfer.reversed -> refund). "
+            + "sendWebhook=false changes only the provider's record, as if the webhook was lost: reconciliation then finds the break")
     public TransferDto simulateWebhook(@PathVariable String reference,
                                        @Valid @RequestBody SimulatedWebhookRequest request) {
         PayoutStatus status = switch (request.event()) {
@@ -47,7 +48,9 @@ public class TransferSimulationController {
             default -> PayoutStatus.REVERSED;
         };
         PayoutResult result = gateway.settle(reference, status, "Simulated " + request.event());
-        payoutProcessor.applyGatewayResult(reference, result.status(), result.gatewayReference(), result.message());
+        if (!Boolean.FALSE.equals(request.sendWebhook())) {
+            payoutProcessor.applyGatewayResult(reference, result.status(), result.gatewayReference(), result.message());
+        }
         return transferService.getByReference(reference);
     }
 
@@ -55,6 +58,8 @@ public class TransferSimulationController {
             @Schema(example = "transfer.failed")
             @NotBlank
             @Pattern(regexp = "transfer\\.(success|failed|reversed)")
-            String event
+            String event,
+            @Schema(example = "true", description = "false = provider changes state but the webhook never arrives")
+            Boolean sendWebhook
     ) {}
 }
