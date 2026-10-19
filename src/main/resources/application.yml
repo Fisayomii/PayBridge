@@ -23,6 +23,9 @@ spring:
     driver-class-name: org.postgresql.Driver
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
+    hikari:
+      # Supabase's pooler caps connections per project; old and new instances overlap during a deploy.
+      maximum-pool-size: ${DB_POOL_SIZE:5}
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -30,7 +33,8 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: true
+    # Logging every statement is costly on a small instance; set PAYBRIDGE_SHOW_SQL=true locally to see them.
+    show-sql: ${PAYBRIDGE_SHOW_SQL:false}
     open-in-view: false
     properties:
       hibernate:
@@ -39,7 +43,8 @@ spring:
     import: "optional:file:.env[.properties]"
 
 server:
-  port: 8080
+  # Render (and most PaaS) tell the app which port to listen on through PORT.
+  port: ${PORT:8080}
 
 springdoc:
   swagger-ui:

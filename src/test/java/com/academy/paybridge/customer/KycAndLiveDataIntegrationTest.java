@@ -86,6 +86,8 @@ class KycAndLiveDataIntegrationTest extends IntegrationTest {
     @Test
     void feedTickBeyondTheDeviationGuardIsIgnored() {
         BigDecimal before = fxService.currentMidRate();
+        // The very first stored rate is accepted unguarded, so make sure one exists (a fresh database has none).
+        assertThat(fxService.publishFromFeed(new FeedRate(before, Instant.now()), "TEST_FEED")).isTrue();
         boolean accepted = fxService.publishFromFeed(
                 new FeedRate(before.multiply(new BigDecimal("1.5")), Instant.now()), "TEST_FEED");
         assertThat(accepted).isFalse();
