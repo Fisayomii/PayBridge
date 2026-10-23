@@ -56,7 +56,8 @@ paybridge:
     # paystack  = real Paystack API (test or live key in PAYSTACK_SECRET_KEY)
     # simulated = in-memory provider for offline demos; never use in production
     provider: ${PAYBRIDGE_PAYMENTS_PROVIDER:paystack}
-
+  cors:
+    allowed-origins: ${PAYBRIDGE_CORS_ORIGINS:http://localhost:5173}
   security:
     jwt:
       # At least 32 random bytes. Generate one with:  openssl rand -base64 48
