@@ -58,6 +58,10 @@ paybridge:
     provider: ${PAYBRIDGE_PAYMENTS_PROVIDER:paystack}
   cors:
     allowed-origins: ${PAYBRIDGE_CORS_ORIGINS:http://localhost:5173}
+  # Email alerts. Locally Gmail SMTP (MAIL_USERNAME/MAIL_PASSWORD) works; Render's free plan blocks SMTP,
+  # so there set BREVO_API_KEY and alerts go over HTTPS instead. MAIL_USERNAME is the sender address.
+  mail:
+    brevo-api-key: ${BREVO_API_KEY:}
   security:
     jwt:
       # At least 32 random bytes. Generate one with:  openssl rand -base64 48

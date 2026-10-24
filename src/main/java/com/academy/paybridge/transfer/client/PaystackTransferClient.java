@@ -15,6 +15,10 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,6 +38,10 @@ public class PaystackTransferClient implements TransferGateway {
             new ParameterizedTypeReference<>() {};
     private static final ParameterizedTypeReference<PaystackResponse<TransferData>> TRANSFER =
             new ParameterizedTypeReference<>() {};
+    private static final ParameterizedTypeReference<PaystackResponse<List<BankData>>> BANKS =
+            new ParameterizedTypeReference<>() {};
+    private static final int BANK_PAGE_SIZE = 100;
+    private static final int MAX_BANK_PAGES = 10;
 
     private final PaystackHttpClient paystack;
 
@@ -52,6 +60,39 @@ public class PaystackTransferClient implements TransferGateway {
             throw new GatewayRejectedException("Could not resolve account: " + response.message());
         }
         return new BankResolutionResult(accountNumber, response.data().accountName(), bankCode, "PAYSTACK");
+    }
+
+    /**
+     * GET /bank?country=nigeria&currency=NGN, page by page. Stops when a page is short or adds no new banks,
+     * so it is correct whether Paystack pages the list or returns it whole.
+     */
+    @Override
+    @Retry(name = "paystack")
+    @CircuitBreaker(name = "paystack")
+    public List<Bank> listBanks() {
+        Map<String, Bank> byCode = new LinkedHashMap<>();
+        for (int page = 1; page <= MAX_BANK_PAGES; page++) {
+            PaystackResponse<List<BankData>> response = paystack.get("list banks", BANKS,
+                    "/bank?country=nigeria&currency=NGN&perPage={size}&page={page}", BANK_PAGE_SIZE, page);
+            if (!response.status() || response.data() == null) {
+                throw new GatewayRejectedException("Could not list banks: " + response.message());
+            }
+            int before = byCode.size();
+            for (BankData b : response.data()) {
+                boolean usable = !isBlank(b.code()) && !isBlank(b.name())
+                        && !Boolean.FALSE.equals(b.active()) && !Boolean.TRUE.equals(b.isDeleted());
+                if (usable) {
+                    byCode.putIfAbsent(b.code(), new Bank(b.code(), b.name().trim()));
+                }
+            }
+            if (response.data().size() < BANK_PAGE_SIZE || byCode.size() == before) {
+                break;
+            }
+        }
+        List<Bank> banks = new ArrayList<>(byCode.values());
+        banks.sort(Comparator.comparing(Bank::name, String.CASE_INSENSITIVE_ORDER));
+        log.info("Loaded {} banks from Paystack", banks.size());
+        return banks;
     }
 
     @Override
@@ -141,6 +182,14 @@ public class PaystackTransferClient implements TransferGateway {
     record ResolveData(
             @JsonProperty("account_number") String accountNumber,
             @JsonProperty("account_name") String accountName
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record BankData(
+            String name,
+            String code,
+            Boolean active,
+            @JsonProperty("is_deleted") Boolean isDeleted
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)

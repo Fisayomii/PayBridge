@@ -1,0 +1,355 @@
+From 920a3b553da479207ba5899eb048f33fcd77cc25 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 24 Oct 2026 08:18:44 +0100
+Subject: [PATCH] Live bank list from Paystack; email alerts over HTTPS (Brevo)
+ for hosts that block SMTP
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019RmwcLqDeTyPHuTHGfBA1s
+---
+ .../service/NotificationService.java          | 62 ++++++++++++++++++-
+ .../client/PaystackTransferClient.java        | 49 +++++++++++++++
+ .../transfer/client/TransferGateway.java      | 20 ++++++
+ .../transfer/service/BankDirectory.java       | 54 ++++++++++++++++
+ .../transfer/web/TransferController.java      | 13 +++-
+ src/main/resources/application.yml            |  4 ++
+ 6 files changed, 200 insertions(+), 2 deletions(-)
+ create mode 100644 src/main/java/com/academy/paybridge/transfer/service/BankDirectory.java
+
+diff --git a/src/main/java/com/academy/paybridge/notification/service/NotificationService.java b/src/main/java/com/academy/paybridge/notification/service/NotificationService.java
+index 141befe..63e0c0f 100644
+--- a/src/main/java/com/academy/paybridge/notification/service/NotificationService.java
++++ b/src/main/java/com/academy/paybridge/notification/service/NotificationService.java
+@@ -11,20 +11,33 @@ import org.springframework.mail.SimpleMailMessage;
+ import org.springframework.mail.javamail.JavaMailSender;
+ import org.springframework.stereotype.Service;
+ 
++import java.net.URI;
++import java.net.http.HttpClient;
++import java.net.http.HttpRequest;
++import java.net.http.HttpResponse;
++import java.time.Duration;
++
+ @Service
+ public class NotificationService {
+ 
+     private static final Logger log = LogManager.getLogger(NotificationService.class);
+ 
++    private static final URI BREVO_SEND = URI.create("https://api.brevo.com/v3/smtp/email");
++
+     private final JavaMailSender mailSender;
+     private final String fromEmail;
++    /** When set, alerts go through Brevo's HTTPS API instead of SMTP (Render's free plan blocks SMTP ports). */
++    private final String brevoApiKey;
++    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+ 
+     public NotificationService(
+             JavaMailSender mailSender,
+-            @Value("${spring.mail.username:noreply@paybridge.com}") String fromEmail
++            @Value("${spring.mail.username:noreply@paybridge.com}") String fromEmail,
++            @Value("${paybridge.mail.brevo-api-key:}") String brevoApiKey
+     ) {
+         this.mailSender = mailSender;
+         this.fromEmail = fromEmail;
++        this.brevoApiKey = brevoApiKey == null ? "" : brevoApiKey.trim();
+     }
+ 
+     public void sendTransferAlerts(TransferEvent event) {
+@@ -108,6 +121,10 @@ public class NotificationService {
+             log.info("[EMAIL SIMULATION] Would have emailed {} (configure MAIL_USERNAME & MAIL_PASSWORD for live delivery)", toEmail);
+             return;
+         }
++        if (!brevoApiKey.isEmpty()) {
++            sendViaBrevo(toEmail, subject, body);
++            return;
++        }
+         try {
+             SimpleMailMessage message = new SimpleMailMessage();
+             message.setFrom(fromEmail);
+@@ -121,6 +138,49 @@ public class NotificationService {
+         }
+     }
+ 
++    /** Brevo transactional email over HTTPS. Async, so a slow mail API never delays a payment response. */
++    private void sendViaBrevo(String toEmail, String subject, String body) {
++        String json = "{\"sender\":{\"name\":\"PayBridge\",\"email\":\"" + jsonEscape(fromEmail) + "\"},"
++                + "\"to\":[{\"email\":\"" + jsonEscape(toEmail) + "\"}],"
++                + "\"subject\":\"" + jsonEscape(subject) + "\","
++                + "\"textContent\":\"" + jsonEscape(body) + "\"}";
++        HttpRequest request = HttpRequest.newBuilder(BREVO_SEND)
++                .timeout(Duration.ofSeconds(10))
++                .header("api-key", brevoApiKey)
++                .header("Content-Type", "application/json")
++                .header("Accept", "application/json")
++                .POST(HttpRequest.BodyPublishers.ofString(json))
++                .build();
++        http.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete((response, error) -> {
++            if (error != null) {
++                log.warn("Could not send email to {} via Brevo: {}", toEmail, error.getMessage());
++            } else if (response.statusCode() >= 300) {
++                log.warn("Brevo refused the email to {} ({}): {}", toEmail, response.statusCode(), response.body());
++            } else {
++                log.info("[LIVE EMAIL DELIVERED] Sent alert to {} via Brevo", toEmail);
++            }
++        });
++    }
++
++    private static String jsonEscape(String value) {
++        if (value == null) return "";
++        StringBuilder out = new StringBuilder(value.length() + 16);
++        for (char c : value.toCharArray()) {
++            switch (c) {
++                case '"' -> out.append("\\\"");
++                case '\\' -> out.append("\\\\");
++                case '\n' -> out.append("\\n");
++                case '\r' -> out.append("\\r");
++                case '\t' -> out.append("\\t");
++                default -> {
++                    if (c < 0x20) out.append(String.format("\\u%04x", (int) c));
++                    else out.append(c);
++                }
++            }
++        }
++        return out.toString();
++    }
++
+     public void sendFundingAlert(FundingEvent event) {
+         boolean credit = "CREDIT".equals(event.direction());
+         String body = String.format(
+diff --git a/src/main/java/com/academy/paybridge/transfer/client/PaystackTransferClient.java b/src/main/java/com/academy/paybridge/transfer/client/PaystackTransferClient.java
+index f3037cb..68c3752 100644
+--- a/src/main/java/com/academy/paybridge/transfer/client/PaystackTransferClient.java
++++ b/src/main/java/com/academy/paybridge/transfer/client/PaystackTransferClient.java
+@@ -15,6 +15,10 @@ import org.springframework.core.ParameterizedTypeReference;
+ import org.springframework.stereotype.Component;
+ 
+ import java.math.BigDecimal;
++import java.util.ArrayList;
++import java.util.Comparator;
++import java.util.LinkedHashMap;
++import java.util.List;
+ import java.util.Map;
+ 
+ /**
+@@ -34,6 +38,10 @@ public class PaystackTransferClient implements TransferGateway {
+             new ParameterizedTypeReference<>() {};
+     private static final ParameterizedTypeReference<PaystackResponse<TransferData>> TRANSFER =
+             new ParameterizedTypeReference<>() {};
++    private static final ParameterizedTypeReference<PaystackResponse<List<BankData>>> BANKS =
++            new ParameterizedTypeReference<>() {};
++    private static final int BANK_PAGE_SIZE = 100;
++    private static final int MAX_BANK_PAGES = 10;
+ 
+     private final PaystackHttpClient paystack;
+ 
+@@ -54,6 +62,39 @@ public class PaystackTransferClient implements TransferGateway {
+         return new BankResolutionResult(accountNumber, response.data().accountName(), bankCode, "PAYSTACK");
+     }
+ 
++    /**
++     * GET /bank?country=nigeria&currency=NGN, page by page. Stops when a page is short or adds no new banks,
++     * so it is correct whether Paystack pages the list or returns it whole.
++     */
++    @Override
++    @Retry(name = "paystack")
++    @CircuitBreaker(name = "paystack")
++    public List<Bank> listBanks() {
++        Map<String, Bank> byCode = new LinkedHashMap<>();
++        for (int page = 1; page <= MAX_BANK_PAGES; page++) {
++            PaystackResponse<List<BankData>> response = paystack.get("list banks", BANKS,
++                    "/bank?country=nigeria&currency=NGN&perPage={size}&page={page}", BANK_PAGE_SIZE, page);
++            if (!response.status() || response.data() == null) {
++                throw new GatewayRejectedException("Could not list banks: " + response.message());
++            }
++            int before = byCode.size();
++            for (BankData b : response.data()) {
++                boolean usable = !isBlank(b.code()) && !isBlank(b.name())
++                        && !Boolean.FALSE.equals(b.active()) && !Boolean.TRUE.equals(b.isDeleted());
++                if (usable) {
++                    byCode.putIfAbsent(b.code(), new Bank(b.code(), b.name().trim()));
++                }
++            }
++            if (response.data().size() < BANK_PAGE_SIZE || byCode.size() == before) {
++                break;
++            }
++        }
++        List<Bank> banks = new ArrayList<>(byCode.values());
++        banks.sort(Comparator.comparing(Bank::name, String.CASE_INSENSITIVE_ORDER));
++        log.info("Loaded {} banks from Paystack", banks.size());
++        return banks;
++    }
++
+     @Override
+     @Retry(name = "paystack")
+     @CircuitBreaker(name = "paystack")
+@@ -143,6 +184,14 @@ public class PaystackTransferClient implements TransferGateway {
+             @JsonProperty("account_name") String accountName
+     ) {}
+ 
++    @JsonIgnoreProperties(ignoreUnknown = true)
++    record BankData(
++            String name,
++            String code,
++            Boolean active,
++            @JsonProperty("is_deleted") Boolean isDeleted
++    ) {}
++
+     @JsonIgnoreProperties(ignoreUnknown = true)
+     record RecipientData(
+             @JsonProperty("recipient_code") String recipientCode
+diff --git a/src/main/java/com/academy/paybridge/transfer/client/TransferGateway.java b/src/main/java/com/academy/paybridge/transfer/client/TransferGateway.java
+index 9f39678..56493c9 100644
+--- a/src/main/java/com/academy/paybridge/transfer/client/TransferGateway.java
++++ b/src/main/java/com/academy/paybridge/transfer/client/TransferGateway.java
+@@ -4,6 +4,7 @@ import com.academy.paybridge.shared.provider.GatewayRejectedException;
+ import com.academy.paybridge.shared.provider.GatewayUnavailableException;
+ 
+ import java.math.BigDecimal;
++import java.util.List;
+ 
+ /**
+  * Outbound bank payout provider (Paystack today; Flutterwave/Fincra can be swapped in behind this interface).
+@@ -27,6 +28,25 @@ public interface TransferGateway {
+     /** Returns {@link PayoutStatus#NOT_FOUND} if the provider has no payout with this reference. */
+     PayoutResult verifyTransfer(String reference);
+ 
++    /**
++     * Nigerian banks that accept NGN payouts, as the provider lists them. The default is a short built-in
++     * list for providers (and the offline simulator) that have no bank directory.
++     */
++    default List<Bank> listBanks() {
++        return FALLBACK_BANKS;
++    }
++
++    List<Bank> FALLBACK_BANKS = List.of(
++            new Bank("044", "Access Bank"), new Bank("050", "Ecobank Nigeria"), new Bank("070", "Fidelity Bank"),
++            new Bank("011", "First Bank of Nigeria"), new Bank("214", "First City Monument Bank"),
++            new Bank("058", "Guaranty Trust Bank"), new Bank("50211", "Kuda Bank"), new Bank("50515", "Moniepoint MFB"),
++            new Bank("999992", "OPay Digital Services Limited (OPay)"), new Bank("999991", "PalmPay"),
++            new Bank("076", "Polaris Bank"), new Bank("221", "Stanbic IBTC Bank"), new Bank("232", "Sterling Bank"),
++            new Bank("032", "Union Bank of Nigeria"), new Bank("033", "United Bank For Africa"),
++            new Bank("035", "Wema Bank"), new Bank("057", "Zenith Bank"));
++
++    record Bank(String code, String name) {}
++
+     enum PayoutStatus { PENDING, SUCCESS, FAILED, REVERSED, NOT_FOUND }
+ 
+     record BankResolutionResult(
+diff --git a/src/main/java/com/academy/paybridge/transfer/service/BankDirectory.java b/src/main/java/com/academy/paybridge/transfer/service/BankDirectory.java
+new file mode 100644
+index 0000000..fca7f5b
+--- /dev/null
++++ b/src/main/java/com/academy/paybridge/transfer/service/BankDirectory.java
+@@ -0,0 +1,54 @@
++package com.academy.paybridge.transfer.service;
++
++import com.academy.paybridge.transfer.client.TransferGateway;
++import com.academy.paybridge.transfer.client.TransferGateway.Bank;
++import org.apache.logging.log4j.LogManager;
++import org.apache.logging.log4j.Logger;
++import org.springframework.stereotype.Service;
++
++import java.time.Duration;
++import java.time.Instant;
++import java.util.List;
++
++/**
++ * The bank list shown in "send to a bank account". Comes from the payout provider (Paystack's GET /bank),
++ * cached for a day because it changes rarely and every page load would otherwise call Paystack.
++ * If the provider is down, the last good list is served; if there has never been one, the built-in list.
++ */
++@Service
++public class BankDirectory {
++
++    private static final Logger log = LogManager.getLogger(BankDirectory.class);
++    private static final Duration TTL = Duration.ofHours(24);
++
++    private final TransferGateway transferGateway;
++    private volatile List<Bank> cached;
++    private volatile Instant loadedAt = Instant.EPOCH;
++
++    public BankDirectory(TransferGateway transferGateway) {
++        this.transferGateway = transferGateway;
++    }
++
++    public List<Bank> banks() {
++        List<Bank> current = cached;
++        if (current != null && loadedAt.plus(TTL).isAfter(Instant.now())) {
++            return current;
++        }
++        synchronized (this) {
++            if (cached != null && loadedAt.plus(TTL).isAfter(Instant.now())) {
++                return cached;
++            }
++            try {
++                List<Bank> fresh = transferGateway.listBanks();
++                if (!fresh.isEmpty()) {
++                    cached = List.copyOf(fresh);
++                    loadedAt = Instant.now();
++                }
++            } catch (RuntimeException ex) {
++                log.warn("Could not load the bank list from the provider, serving the {} list: {}",
++                        cached != null ? "last good" : "built-in", ex.getMessage());
++            }
++            return cached != null ? cached : TransferGateway.FALLBACK_BANKS;
++        }
++    }
++}
+diff --git a/src/main/java/com/academy/paybridge/transfer/web/TransferController.java b/src/main/java/com/academy/paybridge/transfer/web/TransferController.java
+index 4853618..f7a271b 100644
+--- a/src/main/java/com/academy/paybridge/transfer/web/TransferController.java
++++ b/src/main/java/com/academy/paybridge/transfer/web/TransferController.java
+@@ -7,6 +7,7 @@ import com.academy.paybridge.transfer.api.InternalTransferCommand;
+ import com.academy.paybridge.transfer.api.TransferDto;
+ import com.academy.paybridge.transfer.client.TransferGateway;
+ import com.academy.paybridge.transfer.domain.TransferType;
++import com.academy.paybridge.transfer.service.BankDirectory;
+ import com.academy.paybridge.transfer.service.TransferService;
+ import io.swagger.v3.oas.annotations.Operation;
+ import io.swagger.v3.oas.annotations.Parameter;
+@@ -25,6 +26,7 @@ import org.springframework.http.ResponseEntity;
+ import org.springframework.web.bind.annotation.*;
+ 
+ import java.math.BigDecimal;
++import java.util.List;
+ import java.util.UUID;
+ 
+ @RestController
+@@ -35,9 +37,18 @@ public class TransferController {
+     static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
+ 
+     private final TransferService transferService;
++    private final BankDirectory bankDirectory;
+ 
+-    public TransferController(TransferService transferService) {
++    public TransferController(TransferService transferService, BankDirectory bankDirectory) {
+         this.transferService = transferService;
++        this.bankDirectory = bankDirectory;
++    }
++
++    @GetMapping("/banks")
++    @Operation(summary = "Nigerian banks you can pay out to (from Paystack, cached for a day): code + name")
++    public List<TransferGateway.Bank> banks() {
++        CurrentUser.require();
++        return bankDirectory.banks();
+     }
+ 
+     @GetMapping("/banks/resolve")
+diff --git a/src/main/resources/application.yml b/src/main/resources/application.yml
+index a6a7733..be2f3b0 100644
+--- a/src/main/resources/application.yml
++++ b/src/main/resources/application.yml
+@@ -58,6 +58,10 @@ paybridge:
+     provider: ${PAYBRIDGE_PAYMENTS_PROVIDER:paystack}
+   cors:
+     allowed-origins: ${PAYBRIDGE_CORS_ORIGINS:http://localhost:5173}
++  # Email alerts. Locally Gmail SMTP (MAIL_USERNAME/MAIL_PASSWORD) works; Render's free plan blocks SMTP,
++  # so there set BREVO_API_KEY and alerts go over HTTPS instead. MAIL_USERNAME is the sender address.
++  mail:
++    brevo-api-key: ${BREVO_API_KEY:}
+   security:
+     jwt:
+       # At least 32 random bytes. Generate one with:  openssl rand -base64 48
+-- 
+2.43.0
+

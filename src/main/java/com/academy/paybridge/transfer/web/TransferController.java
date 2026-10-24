@@ -7,6 +7,7 @@ import com.academy.paybridge.transfer.api.InternalTransferCommand;
 import com.academy.paybridge.transfer.api.TransferDto;
 import com.academy.paybridge.transfer.client.TransferGateway;
 import com.academy.paybridge.transfer.domain.TransferType;
+import com.academy.paybridge.transfer.service.BankDirectory;
 import com.academy.paybridge.transfer.service.TransferService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -25,6 +26,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -35,9 +37,18 @@ public class TransferController {
     static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
 
     private final TransferService transferService;
+    private final BankDirectory bankDirectory;
 
-    public TransferController(TransferService transferService) {
+    public TransferController(TransferService transferService, BankDirectory bankDirectory) {
         this.transferService = transferService;
+        this.bankDirectory = bankDirectory;
+    }
+
+    @GetMapping("/banks")
+    @Operation(summary = "Nigerian banks you can pay out to (from Paystack, cached for a day): code + name")
+    public List<TransferGateway.Bank> banks() {
+        CurrentUser.require();
+        return bankDirectory.banks();
     }
 
     @GetMapping("/banks/resolve")
